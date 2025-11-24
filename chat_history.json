@@ -1,0 +1,12 @@
+{
+    "james": [
+        {
+            "role": "user",
+            "content": "hello "
+        },
+        {
+            "role": "assistant",
+            "content": "Hello. It's nice to talk to you. Is there something on your mind that you'd like to share or talk about? I'm here to listen and support you without judgment."
+        }
+    ]
+}
