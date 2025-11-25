@@ -21,7 +21,6 @@ except Exception:
 # Model
 GROQ_MODEL = "llama-3.1-8b-instant"
 
-
 # Use the project's r1.avif background image — make sure file exists in same folder or in /mnt/data
 BACKGROUND_IMAGE_PATH = "r1.avif"  # or "/mnt/data/r1.avif"
 HISTORY_FILE = "chat_history.json"
@@ -461,7 +460,6 @@ def run_tool_command(command):
     # fallback
     return "Tool unavailable."
 
-```python
 # ----------------------------
 # Positive Affirmations & Guided Meditations (kept tools)
 # ----------------------------
