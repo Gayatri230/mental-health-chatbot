@@ -1,4 +1,4 @@
-# mychatbot.py — Final: Soft Frosted Glass UI, single background r1.avif, expanded Tools (modified)
+# mychatbot.py — Final: Soft Frosted Glass UI, single background r1.avif, trimmed tools, persistent Community Wall
 import base64
 import json
 import uuid
@@ -10,10 +10,13 @@ import streamlit as st
 from groq import Groq
 
 # Load API key securely
-GROQ_API_KEY = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or (st.secrets.get("GROQ_API_KEY") if hasattr(st, "secrets") else None)
 
-# Initialize Groq client
-client = Groq(api_key=GROQ_API_KEY)
+# Initialize Groq client (wrapped to avoid crash when key missing)
+try:
+    client = Groq(api_key=GROQ_API_KEY)
+except Exception:
+    client = None
 
 # Model
 GROQ_MODEL = "llama-3.1-8b-instant"
@@ -23,7 +26,7 @@ GROQ_MODEL = "llama-3.1-8b-instant"
 BACKGROUND_IMAGE_PATH = "r1.avif"  # or "/mnt/data/r1.avif"
 HISTORY_FILE = "chat_history.json"
 APPOINTMENTS_FILE = "appointments.json"
-COMMENTS_FILE = "comments.json"  # <-- persistent community comments (must exist or will be created)
+COMMENTS_FILE = "comments.json"  # persistent community comments
 
 SYSTEM_PROMPT = """
 You are a confidential, non-judgmental Mental Health Support Chatbot.
@@ -145,8 +148,6 @@ st.session_state.setdefault("logged_in", False)
 st.session_state.setdefault("username", None)
 st.session_state.setdefault("conversation_history", [])
 st.session_state.setdefault("resources_for_session", None)
-st.session_state.setdefault("tools_for_session", None)
-st.session_state.setdefault("auto_threads_for_session", None)
 st.session_state.setdefault("community_view", None)
 
 # ----------------------------
@@ -255,41 +256,11 @@ def generate_resources_fallback(username, n=6):
     return out
 
 # ----------------------------
-# Local fallback threads generator
-# ----------------------------
-def generate_threads_fallback(username, n_threads=5):
-    rnd = random.Random(seed_from_username(username) + 17)
-    titles = [
-        "Night anxiety—how do you cope?",
-        "Anyone else struggle with overthinking?",
-        "Small habits that improved my mood",
-        "How to set boundaries with family",
-        "Sleep routine tips that helped me"
-    ]
-    snippets = [
-        "I used weighted blankets and it helped me sleep a bit better.",
-        "Short walks in morning made a difference for me.",
-        "Talking to one trusted person weekly helped.",
-        "Breathing exercises calm me within minutes.",
-        "Micro tasks helped me start my day without pressure."
-    ]
-    threads = {}
-    for i in range(1, n_threads+1):
-        title = rnd.choice(titles)
-        posts = []
-        count = rnd.choice([2,3])
-        for _ in range(count):
-            user = rnd.choice(["UserA","UserB","SupportSam","PeerJess"])
-            time = f"{rnd.randint(1,48)} hours ago"
-            content = rnd.choice(snippets)
-            posts.append({"user": user, "time": time, "content": content})
-        threads[f"auto_thread_{i}"] = {"title": title, "posts": posts}
-    return threads
-
-# ----------------------------
 # Groq wrapper with safe fallback
 # ----------------------------
 def groq_chat(messages, model=GROQ_MODEL, temperature=0.6):
+    if client is None:
+        return "Error: Groq client not configured."
     try:
         resp = client.chat.completions.create(model=model, messages=messages, temperature=temperature)
         try:
@@ -300,7 +271,7 @@ def groq_chat(messages, model=GROQ_MODEL, temperature=0.6):
         return f"Error: {e}"
 
 # ----------------------------
-# Generate session resources/tools/threads using Groq when available
+# Generate session resources using Groq when available
 # with deterministic local fallback
 # ----------------------------
 def generate_resources_for_session(username, n=6):
@@ -322,54 +293,18 @@ def generate_resources_for_session(username, n=6):
             return cleaned
     except Exception:
         return generate_resources_fallback(username, n=n)
-
-def generate_tools_for_session(username):
-    # We keep this function for backward compatibility, but it will not be used to populate the Tools tab.
-    prompt = (
-        "Generate 6 short self-help tools (title + 1-line description + command name) for a mental health app. "
-        "Return JSON array with keys: title, summary, command."
-    )
-    messages = [{"role":"system","content":SYSTEM_PROMPT}, {"role":"user","content":prompt}]
-    resp = groq_chat(messages)
-    try:
-        parsed = json.loads(resp)
-        if isinstance(parsed, list) and parsed:
-            cleaned = []
-            for item in parsed[:6]:
-                title = item.get("title") or item.get("name") or "Tool"
-                summary = item.get("summary") or item.get("desc") or ""
-                command = item.get("command") or title
-                cleaned.append({"title": title, "summary": summary, "command": command})
-            return cleaned
-    except Exception:
-        return generate_tools_fallback(username)
-
-def generate_auto_threads_for_session(username, n_threads=5):
-    prompt = (
-        f"Create {n_threads} short community discussion threads focused on mental health topics. "
-        "Return JSON array with title and posts (posts: user, time, content)."
-    )
-    messages = [{"role":"system","content":SYSTEM_PROMPT}, {"role":"user","content":prompt}]
-    resp = groq_chat(messages)
-    try:
-        arr = json.loads(resp)
-        threads = {}
-        for i, t in enumerate(arr, 1):
-            threads[f"auto_thread_{i}"] = {"title": t.get("title", f"Thread {i}"), "posts": t.get("posts", [])}
-        return threads
-    except Exception:
-        return generate_threads_fallback(username, n_threads=n_threads)
+    # fallback if Groq returned something not JSON
+    return generate_resources_fallback(username, n=n)
 
 # ----------------------------
 # Ensure session generation each login (fresh content)
 # ----------------------------
 def ensure_session_resources_and_threads(username):
+    # Only resources are generated for a session — no tools/auto-threads
     st.session_state['resources_for_session'] = generate_resources_for_session(username, n=6)
-    st.session_state['tools_for_session'] = generate_tools_for_session(username)
-    st.session_state['auto_threads_for_session'] = generate_auto_threads_for_session(username, n_threads=5)
 
 # ----------------------------
-# Appointments (same as before)
+# Appointments
 # ----------------------------
 DOCTOR_PROFILES = [
     {"id":"doc1","name":"Dr. Asha Rao","specialty":"Anxiety, CBT Therapy","location":"Ballari, Karnataka","phone":"+91-90000-00001","image":"https://i.ibb.co/3chGS5k/doctor1.png"},
@@ -446,36 +381,14 @@ def generate_response(user_input):
     return reply
 
 def run_tool_command(command):
-    # This function is retained for compatibility but is not used for the Tools tab.
+    # minimal compatibility — not used in UI
     cmd = (command or "").lower()
     if "affirm" in cmd or "affirmation" in cmd:
         return "You are capable, you are enough, and you deserve care. 💚"
     if "breath" in cmd or "breathing2" in cmd:
         return "Try: breathe in 4 — hold 2 — out 6. Repeat 6 times."
-    if "body" in cmd or "bodyscan" in cmd:
-        return "Start at your toes — notice sensations slowly upward — release tension as you go."
-    if "journal" in cmd or "journal_prompt" in cmd:
-        prompts = [
-            "What is one small win from today?",
-            "Name one thing you felt grateful for today.",
-            "What thought would I like to challenge and why?"
-        ]
-        return random.choice(prompts)
-    if "micro" in cmd or "activity" in cmd:
-        activities = ["5-minute walk", "tidy one shelf", "call one friend for 2 minutes", "drink a glass of water"]
-        return f"Try this micro-activity: {random.choice(activities)}"
-    if "sleep" in cmd or "sleep_tips" in cmd:
-        return "Sleep tip: Reduce screens 60 min before bed, cool room, consistent time."
-    if "ground" in cmd or "grounding" in cmd:
-        return "Grounding 5-4-3-2-1: name 5 things you see, 4 you can touch, 3 you hear, 2 you smell, 1 you taste."
-    if "social" in cmd or "social_reach" in cmd:
-        return "Send a short message: 'Thinking of you — hope you're well.' Keep it simple."
-    # fallback: call Groq for a one-liner tip
-    try:
-        resp = groq_chat([{"role":"system","content":SYSTEM_PROMPT}, {"role":"user","content":f"Provide a concise one-line self-help tip for: {command}"}], temperature=0.5)
-        return resp
-    except Exception:
-        return "Tool unavailable right now."
+    # fallback
+    return "Tool unavailable."
 
 # ----------------------------
 # Positive Affirmations & Guided Meditations (kept tools)
@@ -505,41 +418,6 @@ def get_random_affirmation():
 
 def get_random_meditation():
     return random.choice(MEDITATIONS)
-
-# ----------------------------
-# Community thread UI (soft frosted card style) — retains mock auto threads
-# ----------------------------
-def community_thread_page(key):
-    threads = st.session_state.get("auto_threads_for_session", {})
-    thread = threads.get(key)
-    if not thread:
-        st.error("Thread not found.")
-        return
-
-    # Explanation card
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.markdown('<div class="card-title">👥 Community Forums — What this area is</div>', unsafe_allow_html=True)
-    st.markdown('<div class="card-sub">These threads are mock-generated to model real peer-support discussions for privacy and demo purposes. They are illustrative, not professional advice.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.subheader(thread.get("title","Discussion"))
-    if st.button("⬅ Back"):
-        st.session_state["community_view"] = None
-        st.rerun()
-
-    for post in thread.get("posts", []):
-        role = "assistant" if "Bot" in post.get("user","") else "user"
-        with st.chat_message(role):
-            st.markdown(f"**{post.get('user','unknown')}** ({post.get('time','')})")
-            st.markdown(post.get("content",""))
-
-    st.markdown("---")
-    reply = st.text_area("Write a reply (mock)")
-    if st.button("Post"):
-        if reply.strip():
-            st.success("Reply posted (mock). This demo does not persist user-generated thread replies.")
-        else:
-            st.warning("Write something before posting.")
 
 # ----------------------------
 # Login page
@@ -626,7 +504,7 @@ def main_app():
         st.markdown("---")
         book_appointment_ui()
 
-    # Community tab — persistent comment wall + mock threads
+    # Community tab — persistent comment wall (no auto-threads)
     with tab4:
         st.subheader("Community Discussions")
 
@@ -673,23 +551,6 @@ def main_app():
         else:
             st.info("No community posts yet — be the first to share some positivity.")
         st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("---")
-
-        # --- Mock auto-generated threads (kept for demo) ---
-        threads = st.session_state.get("auto_threads_for_session", {}) or {}
-        for key, t in threads.items():
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown(f"<div class='card-title'>{t.get('title')}</div>", unsafe_allow_html=True)
-            last = t.get("posts", [])[-1].get("user","") if t.get("posts") else ""
-            st.markdown(f"<div class='card-sub'>Last reply: {last}</div>", unsafe_allow_html=True)
-            if st.button("Open Thread", key=f"thread_{key}"):
-                st.session_state["community_view"] = key
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        if st.session_state.get("community_view"):
-            community_thread_page(st.session_state.get("community_view"))
 
     # Logout
     if st.button("🚪 Log Out"):
