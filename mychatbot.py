@@ -1,4 +1,4 @@
-# mychatbot.py — Final: Soft Frosted Glass UI, single background r1.avif, trimmed tools, persistent Community Wall
+# mychatbot.py — Final: Soft Frosted Glass UI, single background r1.avif, topic-based Community threads, trimmed tools
 import base64
 import json
 import uuid
@@ -32,6 +32,22 @@ SYSTEM_PROMPT = """
 You are a confidential, non-judgmental Mental Health Support Chatbot.
 You are not a substitute for a professional. Respond with empathy, calm, concise steps and safety guidance when needed.
 """
+
+# ----------------------------
+# Topics (confirmed final list)
+# ----------------------------
+TOPICS = [
+    "Depression",
+    "Anxiety",
+    "Feeling Isolated?",
+    "Family Issues",
+    "Boundaries",
+    "Late night sleep problems",
+    "How to overcome anxiety?",
+    "Having arguments in family daily",
+    "How to overcome late night sleep?",
+    "Recovering from panic attack?"
+]
 
 # ----------------------------
 # Helpers: load background as base64 (guaranteed to work)
@@ -148,13 +164,15 @@ st.session_state.setdefault("logged_in", False)
 st.session_state.setdefault("username", None)
 st.session_state.setdefault("conversation_history", [])
 st.session_state.setdefault("resources_for_session", None)
-st.session_state.setdefault("community_view", None)
+st.session_state.setdefault("community_view_topic", None)
 
 # ----------------------------
 # Persistence helpers
 # ----------------------------
 def safe_load_json(path):
     try:
+        if not os.path.exists(path):
+            return {}
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
@@ -178,42 +196,95 @@ def save_history(username, history):
     safe_save_json(HISTORY_FILE, all_history)
 
 # ----------------------------
-# Comments persistence for Community wall
+# Comments persistence for Community (topic-based, Option A)
 # ----------------------------
+def _make_empty_comments_structure():
+    return {t: [] for t in TOPICS}
+
 def load_comments():
     """
-    Returns list of comment dicts:
-    [
-      {"id": "<uuid>", "user": "alice", "text": "nice!", "created_at": "ISO timestamp"}
-    ]
+    Returns a dict: topic -> list[comment dicts].
+    Auto-creates the structure if file missing or invalid.
+    Accepts legacy formats and migrates where reasonable.
     """
     data = safe_load_json(COMMENTS_FILE)
-    # If file contains a list (older simple file), accept it.
+    # If missing or empty, create structure
+    if not data:
+        out = _make_empty_comments_structure()
+        # Save immediately to ensure file exists
+        safe_save_json(COMMENTS_FILE, out)
+        return out
+
+    # If data is a list (legacy), migrate into first topic
     if isinstance(data, list):
-        # migrate list of strings into structured objects if needed
-        out = []
+        out = _make_empty_comments_structure()
         for item in data:
             if isinstance(item, str):
-                out.append({
+                out[TOPICS[0]].append({
                     "id": str(uuid.uuid4()),
                     "user": "anonymous",
                     "text": item,
                     "created_at": datetime.utcnow().isoformat()
                 })
             elif isinstance(item, dict):
-                out.append(item)
+                out[TOPICS[0]].append(item)
+        safe_save_json(COMMENTS_FILE, out)
         return out
-    # if dict, expect {"comments": [...]}
-    if isinstance(data, dict):
-        comments = data.get("comments")
-        if isinstance(comments, list):
-            return comments
-    # fallback: empty list
-    return []
 
-def save_comments(comments):
-    # save as simple dict wrapper for forward-compat
-    payload = {"comments": comments}
+    # If dict, and keys look like topics (subset), normalize and ensure all topics present
+    if isinstance(data, dict):
+        # If data already is in expected format (topic -> list)
+        if all(isinstance(v, list) for v in data.values()) and set(TOPICS).intersection(set(data.keys())):
+            out = {t: [] for t in TOPICS}
+            for k, v in data.items():
+                if k in out and isinstance(v, list):
+                    # keep only dict/list items
+                    clean_list = []
+                    for item in v:
+                        if isinstance(item, dict):
+                            # normalize essential fields
+                            clean_list.append({
+                                "id": item.get("id", str(uuid.uuid4())),
+                                "user": item.get("user", "anonymous"),
+                                "text": item.get("text", ""),
+                                "created_at": item.get("created_at", datetime.utcnow().isoformat())
+                            })
+                    out[k] = clean_list
+            # Save normalized structure
+            safe_save_json(COMMENTS_FILE, out)
+            return out
+        # If wrapper or other dict format (e.g., {"comments": [...]})
+        if "comments" in data and isinstance(data["comments"], list):
+            out = _make_empty_comments_structure()
+            for item in data["comments"]:
+                if isinstance(item, dict):
+                    out[TOPICS[0]].append({
+                        "id": item.get("id", str(uuid.uuid4())),
+                        "user": item.get("user", "anonymous"),
+                        "text": item.get("text", ""),
+                        "created_at": item.get("created_at", datetime.utcnow().isoformat())
+                    })
+                elif isinstance(item, str):
+                    out[TOPICS[0]].append({
+                        "id": str(uuid.uuid4()),
+                        "user": "anonymous",
+                        "text": item,
+                        "created_at": datetime.utcnow().isoformat()
+                    })
+            safe_save_json(COMMENTS_FILE, out)
+            return out
+
+    # Unknown format: overwrite with empty structure to be safe
+    out = _make_empty_comments_structure()
+    safe_save_json(COMMENTS_FILE, out)
+    return out
+
+def save_comments(comments_by_topic):
+    """
+    Save the dict topic -> list-of-comments.
+    Only known topics are saved (prevents accidental keys).
+    """
+    payload = {t: comments_by_topic.get(t, []) for t in TOPICS}
     safe_save_json(COMMENTS_FILE, payload)
 
 # ----------------------------
@@ -390,6 +461,7 @@ def run_tool_command(command):
     # fallback
     return "Tool unavailable."
 
+```python
 # ----------------------------
 # Positive Affirmations & Guided Meditations (kept tools)
 # ----------------------------
@@ -504,53 +576,93 @@ def main_app():
         st.markdown("---")
         book_appointment_ui()
 
-    # Community tab — persistent comment wall (no auto-threads)
+    # Community tab — topic cards & thread pages (user-only comments)
     with tab4:
         st.subheader("Community Discussions")
 
-        # --- Persistent Community Wall (saved to comments.json) ---
+        # Top explanation card
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.markdown('<div class="card-title">🌱 Community Wall</div>', unsafe_allow_html=True)
-        st.markdown('<div class="card-sub">Share supportive messages. All posts are saved and visible to everyone.</div>', unsafe_allow_html=True)
-
-        comments = load_comments()  # list of dicts
-        # Input area
-        with st.form("community_post_form"):
-            st.text_input("Display name (optional)", value=st.session_state.get("username",""), key="post_name_input")
-            comment_text = st.text_area("Write something kind, supportive, or share a short experience:", height=100)
-            submit_post = st.form_submit_button("Post to Community")
-            if submit_post:
-                if comment_text and comment_text.strip():
-                    poster = st.session_state.get("post_name_input") or st.session_state.get("username") or "anonymous"
-                    new_comment = {
-                        "id": str(uuid.uuid4()),
-                        "user": poster,
-                        "text": comment_text.strip(),
-                        "created_at": datetime.utcnow().isoformat()
-                    }
-                    comments.append(new_comment)
-                    save_comments(comments)
-                    st.success("Your comment has been posted to the Community Wall.")
-                    # refresh state to show new comment immediately
-                    st.experimental_rerun()
-                else:
-                    st.error("Comment cannot be empty.")
+        st.markdown('<div class="card-title">🌱 Community Topics</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-sub">Choose a topic, read what others have shared, or add your own supportive message. Only users can post — no bot replies here.</div>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # Display comments (most recent first)
-        st.markdown('<div style="margin-top:12px;">', unsafe_allow_html=True)
-        if comments:
-            for c in reversed(comments):
-                created = c.get("created_at","")
-                user = c.get("user","anonymous")
-                text = c.get("text","")
-                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-                st.markdown(f"<div style='font-weight:700'>{user} <span style='color:#c6d0d7;font-weight:400;font-size:12px'> — {created}</span></div>", unsafe_allow_html=True)
-                st.markdown(f"<div style='margin-top:6px'>{text}</div>", unsafe_allow_html=True)
-                st.markdown('</div>', unsafe_allow_html=True)
+        # Load comments (topic -> list)
+        comments_by_topic = load_comments()
+
+        # If user has selected a topic to view, show thread view
+        current_topic = st.session_state.get("community_view_topic", None)
+
+        if current_topic:
+            # Thread view for the selected topic
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.markdown(f"<div class='card-title'>📂 {current_topic}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='card-sub'>Showing all user posts for: <strong>{current_topic}</strong></div>", unsafe_allow_html=True)
+            if st.button("⬅ Back to topics", key="back_to_topics"):
+                st.session_state["community_view_topic"] = None
+                st.experimental_rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+            # Display existing comments (most recent first)
+            topic_comments = comments_by_topic.get(current_topic, []) or []
+            st.markdown('<div style="margin-top:12px;">', unsafe_allow_html=True)
+            if topic_comments:
+                for c in reversed(topic_comments):
+                    created = c.get("created_at", "")
+                    user = c.get("user", "anonymous")
+                    text = c.get("text", "")
+                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                    st.markdown(f"<div style='font-weight:700'>{user} <span style='color:#c6d0d7;font-weight:400;font-size:12px'> — {created}</span></div>", unsafe_allow_html=True)
+                    st.markdown(f"<div style='margin-top:6px'>{text}</div>", unsafe_allow_html=True)
+                    st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("No posts yet in this topic — share your experience or encouragement below.")
+
+            # Posting form (only users)
+            with st.form(f"post_form_{current_topic}"):
+                poster = st.text_input("Display name (optional)", value=st.session_state.get("username", ""), key=f"post_name_{current_topic}")
+                comment_text = st.text_area("Write your message (be kind, supportive, and respectful):", height=140, key=f"post_text_{current_topic}")
+                submitted = st.form_submit_button("Post")
+                if submitted:
+                    if not comment_text or not comment_text.strip():
+                        st.error("Comment cannot be empty.")
+                    else:
+                        poster_name = poster or st.session_state.get("username") or "anonymous"
+                        new_comment = {
+                            "id": str(uuid.uuid4()),
+                            "user": poster_name,
+                            "text": comment_text.strip(),
+                            "created_at": datetime.utcnow().isoformat()
+                        }
+                        comments_by_topic.setdefault(current_topic, []).append(new_comment)
+                        save_comments(comments_by_topic)
+                        st.success("Your message has been posted.")
+                        # clear the text area and refresh to show new post
+                        st.session_state[f"post_text_{current_topic}"] = ""
+                        st.experimental_rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
         else:
-            st.info("No community posts yet — be the first to share some positivity.")
-        st.markdown('</div>', unsafe_allow_html=True)
+            # Topics overview: show big clickable cards with latest user comment as description
+            st.markdown('<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;">', unsafe_allow_html=True)
+            for topic in TOPICS:
+                # get last comment preview
+                lst = comments_by_topic.get(topic, []) or []
+                preview = ""
+                if lst:
+                    last = lst[-1]  # newest at the end
+                    preview = last.get("text", "")[:280]  # preview length
+                # render card
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.markdown(f"<div class='card-title'>{topic}</div>", unsafe_allow_html=True)
+                if preview:
+                    st.markdown(f"<div style='margin-bottom:10px;font-size:14px'>{preview}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='card-sub'>Last by: {lst[-1].get('user','anonymous')} — {lst[-1].get('created_at','')}</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<div style='margin-bottom:10px;font-size:14px;color:#c6d0d7'>No posts yet — be the first to share something supportive.</div>", unsafe_allow_html=True)
+                if st.button("Open Topic", key=f"open_{topic}"):
+                    st.session_state["community_view_topic"] = topic
+                    st.experimental_rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # Logout
     if st.button("🚪 Log Out"):
