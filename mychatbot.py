@@ -1,4 +1,4 @@
-# mychatbot.py — Final: Soft Frosted Glass UI, single background r1.avif, expanded Tools
+# mychatbot.py — Final: Soft Frosted Glass UI, single background r1.avif, expanded Tools (modified)
 import base64
 import json
 import uuid
@@ -23,6 +23,7 @@ GROQ_MODEL = "llama-3.1-8b-instant"
 BACKGROUND_IMAGE_PATH = "r1.avif"  # or "/mnt/data/r1.avif"
 HISTORY_FILE = "chat_history.json"
 APPOINTMENTS_FILE = "appointments.json"
+COMMENTS_FILE = "comments.json"  # <-- persistent community comments (must exist or will be created)
 
 SYSTEM_PROMPT = """
 You are a confidential, non-judgmental Mental Health Support Chatbot.
@@ -176,6 +177,45 @@ def save_history(username, history):
     safe_save_json(HISTORY_FILE, all_history)
 
 # ----------------------------
+# Comments persistence for Community wall
+# ----------------------------
+def load_comments():
+    """
+    Returns list of comment dicts:
+    [
+      {"id": "<uuid>", "user": "alice", "text": "nice!", "created_at": "ISO timestamp"}
+    ]
+    """
+    data = safe_load_json(COMMENTS_FILE)
+    # If file contains a list (older simple file), accept it.
+    if isinstance(data, list):
+        # migrate list of strings into structured objects if needed
+        out = []
+        for item in data:
+            if isinstance(item, str):
+                out.append({
+                    "id": str(uuid.uuid4()),
+                    "user": "anonymous",
+                    "text": item,
+                    "created_at": datetime.utcnow().isoformat()
+                })
+            elif isinstance(item, dict):
+                out.append(item)
+        return out
+    # if dict, expect {"comments": [...]}
+    if isinstance(data, dict):
+        comments = data.get("comments")
+        if isinstance(comments, list):
+            return comments
+    # fallback: empty list
+    return []
+
+def save_comments(comments):
+    # save as simple dict wrapper for forward-compat
+    payload = {"comments": comments}
+    safe_save_json(COMMENTS_FILE, payload)
+
+# ----------------------------
 # Deterministic seed helper (changes every login day)
 # ----------------------------
 def seed_from_username(username):
@@ -213,25 +253,6 @@ def generate_resources_fallback(username, n=6):
             t, s = rnd.choice(ai_resources)
             out.append({"title": t, "summary": s, "link": f"search:{t.replace(' ', '+')}"})
     return out
-
-# ----------------------------
-# Local fallback tools generator (expanded tools)
-# ----------------------------
-def generate_tools_fallback(username):
-    rnd = random.Random(seed_from_username(username) + 11)
-    tools = [
-        {"title":"Affirmation Generator","summary":"Generates a short positive affirmation.","command":"affirmation"},
-        {"title":"2-min Guided Breathing","summary":"Short breathing script to ground you.","command":"breathing2"},
-        {"title":"5-min Body Scan","summary":"Quick body scan to notice tension.","command":"bodyscan5"},
-        {"title":"Journaling Prompt","summary":"A question to start reflective writing.","command":"journal_prompt"},
-        {"title":"Micro-activity Suggester","summary":"Small achievable activity to lift mood.","command":"micro_activity"},
-        {"title":"Sleep Tips Quicklist","summary":"Simple habits to improve sleep tonight.","command":"sleep_tips"},
-        {"title":"Grounding 5-4-3-2-1","summary":"Sensory grounding technique to reduce panic.","command":"grounding_54321"},
-        {"title":"Social Reach Idea","summary":"A low-effort social reconnection suggestion.","command":"social_reach"}
-    ]
-    # pick 5 unique
-    rnd.shuffle(tools)
-    return tools[:6]
 
 # ----------------------------
 # Local fallback threads generator
@@ -303,6 +324,7 @@ def generate_resources_for_session(username, n=6):
         return generate_resources_fallback(username, n=n)
 
 def generate_tools_for_session(username):
+    # We keep this function for backward compatibility, but it will not be used to populate the Tools tab.
     prompt = (
         "Generate 6 short self-help tools (title + 1-line description + command name) for a mental health app. "
         "Return JSON array with keys: title, summary, command."
@@ -424,6 +446,7 @@ def generate_response(user_input):
     return reply
 
 def run_tool_command(command):
+    # This function is retained for compatibility but is not used for the Tools tab.
     cmd = (command or "").lower()
     if "affirm" in cmd or "affirmation" in cmd:
         return "You are capable, you are enough, and you deserve care. 💚"
@@ -455,7 +478,36 @@ def run_tool_command(command):
         return "Tool unavailable right now."
 
 # ----------------------------
-# Community thread UI (soft frosted card style)
+# Positive Affirmations & Guided Meditations (kept tools)
+# ----------------------------
+AFFIRMATIONS = [
+    "I am capable of handling whatever today brings.",
+    "I deserve kindness — from myself and others.",
+    "Small steps forward are progress.",
+    "I am not my thoughts; I am the observer of them.",
+    "My feelings are valid and temporary.",
+    "I choose to be gentle with myself today.",
+    "I have overcome hard things before; I can do it again.",
+    "I breathe in calm and breathe out tension."
+]
+
+MEDITATIONS = [
+    "Close your eyes. Take 3 deep breaths. On each exhale, feel your shoulders drop. Imagine a warm light filling your chest.",
+    "Sit comfortably. Breathe in for 4, hold 2, out for 6. With each breath, imagine calm spreading from head to toe.",
+    "Find your breath. Count to 4 on the inhale, 4 on the exhale. Let thoughts pass like clouds — return to the breath.",
+    "Scan your body from toes to head. Notice tension, breathe into it, imagine it softening and releasing.",
+    "Picture yourself beside a calm lake. Hear the water, feel the breeze. Breathe slowly and rest in that image."
+]
+
+def get_random_affirmation():
+    # return a new random affirmation each time
+    return random.choice(AFFIRMATIONS)
+
+def get_random_meditation():
+    return random.choice(MEDITATIONS)
+
+# ----------------------------
+# Community thread UI (soft frosted card style) — retains mock auto threads
 # ----------------------------
 def community_thread_page(key):
     threads = st.session_state.get("auto_threads_for_session", {})
@@ -537,19 +589,26 @@ def main_app():
                 st.markdown(bot)
             st.rerun()
 
-    # Tools tab
+    # Tools tab — only Affirmation & Guided Meditation (per your request)
     with tab2:
         st.subheader("Instant Self-care Tools")
-        tools = st.session_state.get("tools_for_session", []) or []
-        # present tools in frosted cards
-        for t in tools:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.markdown(f"<div class='card-title'>{t.get('title')}</div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='card-sub'>{t.get('summary')}</div>", unsafe_allow_html=True)
-            if st.button("Run", key=f"tool_{t.get('command')}_{t.get('title')}"):
-                out = run_tool_command(t.get('command') or t.get('title'))
-                st.info(out)
-            st.markdown('</div>', unsafe_allow_html=True)
+        # Affirmation card
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">💛 Positive Affirmation</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-sub">Click to receive a fresh positive affirmation each time.</div>', unsafe_allow_html=True)
+        if st.button("Give me an affirmation", key="affirm_btn"):
+            af = get_random_affirmation()
+            st.success(af)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Guided Meditation card
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">🧘 Guided Meditation</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-sub">Click to receive a new short guided meditation/script each time.</div>', unsafe_allow_html=True)
+        if st.button("Start Meditation", key="meditate_btn"):
+            med = get_random_meditation()
+            st.info(med)
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # Resources tab
     with tab3:
@@ -567,19 +626,68 @@ def main_app():
         st.markdown("---")
         book_appointment_ui()
 
-    # Community tab
+    # Community tab — persistent comment wall + mock threads
     with tab4:
         st.subheader("Community Discussions")
+
+        # --- Persistent Community Wall (saved to comments.json) ---
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown('<div class="card-title">🌱 Community Wall</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card-sub">Share supportive messages. All posts are saved and visible to everyone.</div>', unsafe_allow_html=True)
+
+        comments = load_comments()  # list of dicts
+        # Input area
+        with st.form("community_post_form"):
+            st.text_input("Display name (optional)", value=st.session_state.get("username",""), key="post_name_input")
+            comment_text = st.text_area("Write something kind, supportive, or share a short experience:", height=100)
+            submit_post = st.form_submit_button("Post to Community")
+            if submit_post:
+                if comment_text and comment_text.strip():
+                    poster = st.session_state.get("post_name_input") or st.session_state.get("username") or "anonymous"
+                    new_comment = {
+                        "id": str(uuid.uuid4()),
+                        "user": poster,
+                        "text": comment_text.strip(),
+                        "created_at": datetime.utcnow().isoformat()
+                    }
+                    comments.append(new_comment)
+                    save_comments(comments)
+                    st.success("Your comment has been posted to the Community Wall.")
+                    # refresh state to show new comment immediately
+                    st.experimental_rerun()
+                else:
+                    st.error("Comment cannot be empty.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Display comments (most recent first)
+        st.markdown('<div style="margin-top:12px;">', unsafe_allow_html=True)
+        if comments:
+            for c in reversed(comments):
+                created = c.get("created_at","")
+                user = c.get("user","anonymous")
+                text = c.get("text","")
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.markdown(f"<div style='font-weight:700'>{user} <span style='color:#c6d0d7;font-weight:400;font-size:12px'> — {created}</span></div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='margin-top:6px'>{text}</div>", unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("No community posts yet — be the first to share some positivity.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # --- Mock auto-generated threads (kept for demo) ---
         threads = st.session_state.get("auto_threads_for_session", {}) or {}
         for key, t in threads.items():
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             st.markdown(f"<div class='card-title'>{t.get('title')}</div>", unsafe_allow_html=True)
             last = t.get("posts", [])[-1].get("user","") if t.get("posts") else ""
             st.markdown(f"<div class='card-sub'>Last reply: {last}</div>", unsafe_allow_html=True)
-            if st.button("Open Thread", key=key):
+            if st.button("Open Thread", key=f"thread_{key}"):
                 st.session_state["community_view"] = key
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
+
         if st.session_state.get("community_view"):
             community_thread_page(st.session_state.get("community_view"))
 
