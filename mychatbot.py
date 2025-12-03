@@ -1,4 +1,3 @@
-# mychatbot.py — FINAL 100% WORKING VERSION (No errors + Community saves forever!)
 import base64
 import json
 import random
@@ -7,9 +6,12 @@ import os
 import streamlit as st
 from groq import Groq
 
-# ============================= CONFIG =============================
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or (st.secrets.get("GROQ_API_KEY") if hasattr(st, "secrets") else None)
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+# Initialize client
+
+
 GROQ_MODEL = "llama-3.1-8b-instant"
 
 BACKGROUND_IMAGE_PATH = "r1.avif"
@@ -43,8 +45,13 @@ YOUTUBE_RESOURCES = [
     ("Box Breathing Technique", "Reduce stress in 2 min", "https://www.youtube.com/watch?v=FJJazKtH_9I")
 ]
 
-AFFIRMATIONS = ["You are enough.", "This feeling will pass.", "You've survived 100% of your hardest days.", "It's okay to not be okay."]
-MEDITATIONS = ["Breathe in calm... breathe out tension.", "You are safe right now.", "Let your shoulders drop with each exhale."]
+AFFIRMATIONS = ["You are enough."," I am focused.","I am confident", "This feeling will pass.", "You've survived 100% of your hardest days.", 
+                "It's okay to not be okay.","I am safe. I am present. I am enough.","My mind is clear, and my heart is open"]
+MEDITATIONS = ["Breathe in calm... breathe out tension.", "You are safe right now.", "Let your shoulders drop with each exhale.",
+               " Sit comfortably, close your eyes, and rest your hands on your lap",
+                "Close eyes → breathe in 4 counts → breathe out 6 counts → repeat 3 times.",
+                 "I return to my breath, I return to myself.","My mind is clear, my body is relaxed",
+                 "I inhale strength, I exhale tension."]
 
 # ============================= BACKGROUND =============================
 def load_image_base64(path):
@@ -232,8 +239,8 @@ with tab3:
         with col1:
             st.image(doc["image"], width=110)
         with col2:
-            st.markdown(f"**{doc['name']}**")
-            st.markdown(f"*{doc['specialty']}*")
+            st.markdown(f"{doc['name']}")
+            st.markdown(f"{doc['specialty']}")
             st.markdown(f"Location: {doc['location']}")
             st.markdown(f"Contact: {doc['phone']}")
         st.markdown("---")
